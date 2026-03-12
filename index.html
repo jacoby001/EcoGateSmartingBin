@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ECO-GATE || JARVIS v2.1 FIXED</title>
+    <style>
+        :root {
+            --iron-blue: #00d4ff;
+            --iron-dark: #001a24;
+            --warning-gold: #ffcc00;
+            --stark-red: #ff3c3c;
+            --glass-bg: rgba(0, 20, 30, 0.9);
+        }
+
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+        body, html {
+            margin: 0; padding: 0; height: 100%;
+            background: #000; color: var(--iron-blue);
+            font-family: 'Orbitron', sans-serif;
+            overflow: hidden; text-transform: uppercase;
+        }
+
+        /* Stark Scanline Overlay */
+        body::after {
+            content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%),
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 3px, 3px 100%;
+            pointer-events: none; z-index: 1000;
+        }
+
+        #hud {
+            position: absolute; width: 100%; height: 100%;
+            display: grid; grid-template-columns: 380px 1fr 380px;
+            padding: 30px; box-sizing: border-box; z-index: 10;
+            pointer-events: none;
+        }
+
+        .panel {
+            background: var(--glass-bg);
+            border: 2px solid var(--iron-blue);
+            padding: 20px; pointer-events: all;
+            box-shadow: 0 0 30px rgba(0, 212, 255, 0.2);
+            backdrop-filter: blur(10px);
+            clip-path: polygon(0 0, 90% 0, 100% 10%, 100% 100%, 10% 100%, 0 90%);
+        }
+
+        .section-header { border-bottom: 1px solid var(--iron-blue); margin-bottom: 15px; display: flex; justify-content: space-between; }
+        
+        .control-btn {
+            width: 100%; background: rgba(0, 212, 255, 0.05);
+            border: 1px solid var(--iron-blue); color: var(--iron-blue);
+            padding: 18px; margin-bottom: 12px; cursor: pointer;
+            font-family: 'Orbitron'; font-weight: bold; transition: 0.3s;
+        }
+        .control-btn:hover { background: var(--iron-blue); color: #000; box-shadow: 0 0 20px var(--iron-blue); }
+
+        #serial-log {
+            height: 200px; overflow-y: auto; background: rgba(0,0,0,0.5);
+            font-family: monospace; font-size: 11px; padding: 10px; color: #00ffaa;
+            border: 1px inset var(--iron-blue);
+        }
+
+        .diag-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 10px; margin-top: 10px; }
+        .diag-item { border: 1px solid #1a3a4a; padding: 6px; background: #001015; }
+    </style>
+</head>
+<body>
+
+    <div id="hud">
+        <div class="panel">
+            <div class="section-header"><h2>Smart Sorting Bin</h2><span>v2.1</span></div>
+            <button class="control-btn" onclick="triggerProcess('plastic')">IDENTIFY: PLASTIC</button>
+            <button class="control-btn" onclick="triggerProcess('metal')">IDENTIFY: METAL</button>
+            <button class="control-btn" onclick="triggerProcess('wet')">IDENTIFY: WET WASTE</button>
+            
+            <div class="section-header" style="margin-top: 40px;"><h3>HARDWARE</h3></div>
+            <div class="diag-grid">
+                <div class="diag-item">MCU: ARDUINO UNO</div>
+                <div class="diag-item">DRIVER: L298N</div>
+                <div class="diag-item">STATUS: ONLINE</div>
+                <div class="diag-item">SENSORS: ACTIVE</div>
+            </div>
+        </div>
+        <div></div>
+        <div class="panel">
+            <div class="section-header"><h2>DIAGNOSTICS</h2><span id="sys-status" style="color:#0f0">READY</span></div>
+            <div id="serial-log">> SYSTEM READY...<br>> WAITING FOR INPUT...</div>
+            
+            <div class="section-header" style="margin-top: 20px;"><h3>GATE SERVO</h3></div>
+            <p style="font-size: 10px;">POSITION: <span id="angle-display">0°</span></p>
+            <div style="width: 100%; height: 5px; background: #111;"><div id="load-progress" style="width: 0%; height: 100%; background: var(--iron-blue); transition: 0.4s;"></div></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.skypack.dev/three@0.132.2';
+        import { OrbitControls } from 'https://cdn.skypack.dev/three@0.132.2/examples/jsm/controls/OrbitControls.js';
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        
+        const controls = new OrbitControls(camera, renderer.domElement);
+        camera.position.set(8, 7, 10);
+
+        // Lighting
+        const light1 = new THREE.PointLight(0x00d4ff, 2, 50); light1.position.set(5, 10, 5);
+        const light2 = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(light1, light2);
+        scene.add(new THREE.GridHelper(20, 40, 0x00d4ff, 0x002233));
+
+        // Global Config - FIXED: Angles for metal and wet waste swapped to match physical bin positions
+        const config = {
+            plastic: { color: 0x00ff88, angle: 0, lid: null, lidTarget: 0 },
+            metal: { color: 0xffdd00, angle: (2/3)*Math.PI*2, lid: null, lidTarget: 0 },
+            wet: { color: 0x00aaff, angle: (1/3)*Math.PI*2, lid: null, lidTarget: 0 }
+        };
+
+        const ecoGate = new THREE.Group();
+        scene.add(ecoGate);
+
+        // Build Bins & Lids
+        Object.keys(config).forEach((key, i) => {
+            const binGroup = new THREE.Group();
+            // Bins are positioned at 0, 120, and 240 degrees
+            const angle = (i / 3) * Math.PI * 2;
+            
+            const binGeo = new THREE.CylinderGeometry(1.2, 1, 3, 32, 1, true);
+            const binMat = new THREE.MeshBasicMaterial({ color: config[key].color, wireframe: true, transparent: true, opacity: 0.2 });
+            binGroup.add(new THREE.Mesh(binGeo, binMat));
+
+            const lidPivot = new THREE.Group();
+            lidPivot.position.set(1, 1.5, 0); // Side pivot
+            const lidMesh = new THREE.Mesh(
+                new THREE.CircleGeometry(1.2, 32),
+                new THREE.MeshPhongMaterial({ color: config[key].color, side: THREE.DoubleSide, transparent: true, opacity: 0.7 })
+            );
+            lidMesh.rotation.x = Math.PI / 2;
+            lidMesh.position.x = -1;
+            lidPivot.add(lidMesh);
+            binGroup.add(lidPivot);
+            config[key].lid = lidPivot;
+
+            binGroup.position.set(Math.cos(angle)*3, 1.5, Math.sin(angle)*3);
+            ecoGate.add(binGroup);
+        });
+
+        // Sorting Arm
+        const armPivot = new THREE.Group();
+        armPivot.position.y = 4.5;
+        const armMesh = new THREE.Mesh(new THREE.BoxGeometry(4, 0.1, 0.8), new THREE.MeshPhongMaterial({ color: 0x00d4ff, emissive: 0x00d4ff }));
+        armMesh.position.x = 2;
+        armPivot.add(armMesh);
+        
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.05, 16, 50), new THREE.MeshBasicMaterial({ color: 0x00d4ff }));
+        ring.rotation.x = Math.PI/2; ring.position.x = 4;
+        armPivot.add(ring);
+        scene.add(armPivot);
+
+        // Simulation State
+        let targetArmAngle = 0;
+        let activeItems = [];
+
+        window.triggerProcess = (type) => {
+            const log = document.getElementById('serial-log');
+            log.innerHTML += `<br>> SCANNING: ${type.toUpperCase()}`;
+            targetArmAngle = config[type].angle;
+            
+            // Create Trash Mesh
+            let geo;
+            if(type === 'plastic') geo = new THREE.CylinderGeometry(0.3, 0.3, 0.8, 12);
+            else if(type === 'metal') geo = new THREE.CylinderGeometry(0.4, 0.4, 0.6, 16);
+            else geo = new THREE.SphereGeometry(0.4, 8, 8);
+
+            const item = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color: config[type].color, emissive: config[type].color, emissiveIntensity: 0.5 }));
+            item.position.set(4, 10, 0); // Spawn at ring distance
+            item.userData = { type: type, vy: 0, status: 'scanned' };
+            scene.add(item);
+            activeItems.push(item);
+
+            // Logic Chain: Rotate -> Open Lid -> Drop
+            setTimeout(() => {
+                log.innerHTML += `<br>> ARDUINO: OPENING ${type.toUpperCase()} LID`;
+                config[type].lidTarget = -Math.PI/1.5; // Open
+                
+                setTimeout(() => {
+                    item.userData.status = 'dropping';
+                }, 600);
+            }, 1000);
+        };
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Smooth Arm
+            armPivot.rotation.y = THREE.MathUtils.lerp(armPivot.rotation.y, targetArmAngle, 0.08);
+            document.getElementById('angle-display').innerText = Math.round(armPivot.rotation.y * 57.3) + "°";
+
+            // Smooth Lids
+            Object.keys(config).forEach(key => {
+                config[key].lid.rotation.z = THREE.MathUtils.lerp(config[key].lid.rotation.z, config[key].lidTarget, 0.1);
+            });
+
+            // Physics loop
+            activeItems.forEach((item, i) => {
+                if(item.userData.status === 'scanned') {
+                    // Lock to ring position while arm moves
+                    const angle = armPivot.rotation.y;
+                    item.position.x = Math.cos(angle) * 4;
+                    item.position.z = -Math.sin(angle) * 4;
+                } else if(item.userData.status === 'dropping') {
+                    // Gravity
+                    item.userData.vy += 0.02;
+                    item.position.y -= item.userData.vy;
+
+                    if(item.position.y < 2) {
+                        const type = item.userData.type;
+                        document.getElementById('serial-log').innerHTML += `<br>> ${type.toUpperCase()} DEPOSITED.`;
+                        config[type].lidTarget = 0; // Close Lid
+                        scene.remove(item);
+                        activeItems.splice(i, 1);
+                    }
+                }
+            });
+
+            ring.rotation.z += 0.05;
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
